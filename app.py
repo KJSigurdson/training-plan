@@ -3,18 +3,17 @@ from datetime import date, timedelta
 
 import streamlit as st
 from dotenv import load_dotenv
-from supabase import create_client
+
+from db import get_supabase
+from generate_plan import generate_plan
 
 load_dotenv()
 
-SUPABASE_URL = os.getenv("SUPABASE_URL")
-SUPABASE_SERVICE_ROLE_KEY = os.getenv("SUPABASE_SERVICE_ROLE_KEY")
-
-if not SUPABASE_URL or not SUPABASE_SERVICE_ROLE_KEY:
-    st.error("SUPABASE_URL och SUPABASE_SERVICE_ROLE_KEY måste finnas i .env-filen.")
+try:
+    supabase = get_supabase()
+except RuntimeError as e:
+    st.error(str(e))
     st.stop()
-
-supabase = create_client(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY)
 
 # --- Helpers ---
 
@@ -74,9 +73,48 @@ def mark_session_ready(session_id: str) -> None:
     supabase.table("sessions").update({"status": "ready_for_plan"}).eq("id", session_id).execute()
 
 
+def render_plan(plan: dict) -> None:
+    st.subheader("Träningsplan – kommande 7 dagar")
+    if summary := plan.get("summary"):
+        st.info(summary)
+    sv_days = ["Måndag", "Tisdag", "Onsdag", "Torsdag", "Fredag", "Lördag", "Söndag"]
+    sv_months_long = [
+        "januari", "februari", "mars", "april", "maj", "juni",
+        "juli", "augusti", "september", "oktober", "november", "december",
+    ]
+    for day in plan.get("days", []):
+        try:
+            d = date.fromisoformat(day["date"])
+            date_str = f"{sv_days[d.weekday()]} {d.day} {sv_months_long[d.month - 1]}"
+        except (KeyError, ValueError):
+            date_str = day.get("date", "?")
+        sport = day.get("sport_type", "–")
+        duration = day.get("duration_min", 0)
+        zone = day.get("intensity_zone", "–")
+        rationale = day.get("rationale", "")
+        with st.container(border=True):
+            col1, col2 = st.columns([1, 3])
+            with col1:
+                st.write(f"**{date_str}**")
+                if sport.lower() == "rest":
+                    st.write("Vila")
+                else:
+                    st.write(f"{sport} · {duration} min · {zone}")
+            with col2:
+                if rationale:
+                    st.write(rationale)
+
+
 # --- UI ---
 
 st.title("Träningsreflektion")
+
+if "last_plan" in st.session_state:
+    render_plan(st.session_state["last_plan"])
+    if st.button("Stäng plan", key="close_plan"):
+        del st.session_state["last_plan"]
+        st.rerun()
+    st.divider()
 
 try:
     sessions = fetch_awaiting_sessions()
@@ -174,4 +212,12 @@ for session in sessions:
                 continue
 
             st.success("Reflektion sparad!")
+
+            try:
+                with st.spinner("Genererar träningsplan…"):
+                    plan = generate_plan(sid)
+                st.session_state["last_plan"] = plan
+            except Exception as e:
+                st.error(f"Kunde inte generera träningsplan: {e}")
+
             st.rerun()
