@@ -1,5 +1,4 @@
 import json
-import os
 import re
 from collections import defaultdict
 from datetime import date, timedelta
@@ -7,7 +6,7 @@ from datetime import date, timedelta
 import anthropic
 from dotenv import load_dotenv
 
-from db import get_supabase
+from db import _get_secret, get_supabase
 
 load_dotenv()
 
@@ -209,9 +208,9 @@ def generate_plan(session_id: str) -> dict:
         history, dict(load_by_muscle), stress_map, avail_with_dates, today,
     )
 
-    api_key = os.getenv("ANTHROPIC_API_KEY")
+    api_key = _get_secret("ANTHROPIC_API_KEY")
     if not api_key:
-        raise RuntimeError("ANTHROPIC_API_KEY must be set in .env")
+        raise RuntimeError("ANTHROPIC_API_KEY must be set in .env or st.secrets")
 
     anthropic_client = anthropic.Anthropic(api_key=api_key)
     response = anthropic_client.messages.create(
