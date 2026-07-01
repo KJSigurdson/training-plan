@@ -12,6 +12,46 @@ supabase = require_supabase()
 
 PHASE_LABELS = {"base": "Bas", "build": "Uppbyggnad", "peak": "Topp", "taper": "Nedtrappning"}
 
+# --- Goal cards styling ---
+# Goal facts (Lopp/Datum/Veckor kvar/Fas) render as st.metric inside
+# st.container(border=True, key="goal-card-...").  Passing `key=` gives each
+# card's wrapper a stable `st-key-goal-card-*` class we can target precisely,
+# without also styling other bordered containers on this page (e.g. the plan
+# day cards from render_plan). Tweak colors/radius/font-size to taste.
+st.markdown(
+    """
+    <style>
+    div[data-testid="stVerticalBlock"][class*="st-key-goal-card-"] {
+        background-color: rgba(151, 166, 195, 0.15);  /* card background fill */
+        border-radius: 12px;                          /* corner roundness */
+        padding: 8px;
+    }
+    /* Center the metric label/value/delta inside each card */
+    [class*="st-key-goal-card-"] [data-testid="stMetric"] {
+        text-align: center;
+    }
+    [class*="st-key-goal-card-"] [data-testid="stMetricLabel"],
+    [class*="st-key-goal-card-"] [data-testid="stMetricValue"] {
+        justify-content: center;
+    }
+    /* Let the race name wrap instead of truncating with an ellipsis.
+       Streamlit truncates metric values via CSS on the inner <p>, so
+       override with !important and target descendants too. */
+    [class*="st-key-goal-card-"] [data-testid="stMetricValue"],
+    [class*="st-key-goal-card-"] [data-testid="stMetricValue"] * {
+        white-space: normal !important;
+        overflow: visible !important;
+        text-overflow: unset !important;
+        overflow-wrap: break-word !important;
+    }
+    [class*="st-key-goal-card-"] [data-testid="stMetricValue"] {
+        font-size: 1.5rem;  /* slightly smaller than default so long names fit */
+    }
+    </style>
+    """,
+    unsafe_allow_html=True,
+)
+
 st.title("Översikt")
 
 # --- Goal header ---
@@ -29,17 +69,23 @@ if not goal:
     st.info("Inget mål är satt än.")
 else:
     race_date = parse_date(goal.get("race_date"))
-    col1, col2, col3, col4 = st.columns(4)
-    col1.metric("Lopp", goal.get("race_name") or "–")
-    col2.metric("Datum", fmt_date_long(race_date) if race_date else "–")
     if race_date:
         weeks_to_race = max(0.0, (race_date - date.today()).days / 7)
-        phase = _phase_from_weeks(weeks_to_race)
-        col3.metric("Veckor kvar", f"{weeks_to_race:.1f}")
-        col4.metric("Fas", PHASE_LABELS.get(phase, phase))
+        phase_label = PHASE_LABELS.get(_phase_from_weeks(weeks_to_race), "–")
+        weeks_label = str(round(weeks_to_race))
     else:
-        col3.metric("Veckor kvar", "–")
-        col4.metric("Fas", "–")
+        phase_label = "–"
+        weeks_label = "–"
+
+    goal_facts = [
+        ("Lopp", goal.get("race_name") or "–"),
+        ("Datum", fmt_date_long(race_date) if race_date else "–"),
+        ("Veckor kvar", weeks_label),
+        ("Fas", phase_label),
+    ]
+    for col, (label, value) in zip(st.columns(4), goal_facts):
+        with col, st.container(border=True, key=f"goal-card-{label}"):
+            st.metric(label, value)
 
 st.divider()
 
