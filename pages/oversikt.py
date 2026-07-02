@@ -1,4 +1,4 @@
-from datetime import date
+from datetime import date, timedelta
 
 import pandas as pd
 import plotly.express as px
@@ -116,25 +116,88 @@ else:
 
 st.divider()
 
+# --- Filters (apply to load chart, session history, and fatigue trend) ---
+
+MUSCLE_GROUP_OPTIONS = ["lower", "upper", "full_body", "other"]
+DEFAULT_WEEKS_BACK = 8
+
+try:
+    sport_type_result = supabase.table("sessions").select("sport_type").execute()
+    sport_type_options = sorted({
+        row["sport_type"] for row in (sport_type_result.data or []) if row.get("sport_type")
+    })
+except Exception as e:
+    st.error(f"Kunde inte hämta sporttyper: {e}")
+    sport_type_options = []
+
+today = date.today()
+default_from = today - timedelta(weeks=DEFAULT_WEEKS_BACK)
+
+with st.expander("Filter", expanded=True):
+    filter_col1, filter_col2, filter_col3 = st.columns(3)
+    with filter_col1:
+        date_range = st.date_input(
+            "Datumintervall", value=(default_from, today), format="YYYY-MM-DD"
+        )
+    with filter_col2:
+        selected_sports = st.multiselect(
+            "Sport", options=sport_type_options, default=sport_type_options
+        )
+    with filter_col3:
+        selected_muscle_groups = st.multiselect(
+            "Muskelgrupp", options=MUSCLE_GROUP_OPTIONS, default=MUSCLE_GROUP_OPTIONS
+        )
+
+# st.date_input returns a single date while the user has only picked one
+# endpoint of the range; fall back to the default range until both are set.
+if isinstance(date_range, tuple) and len(date_range) == 2:
+    from_date, to_date = date_range
+else:
+    from_date, to_date = default_from, today
+
+# --- Shared filtered session fetch ---
+
+if from_date > to_date or not selected_sports or not selected_muscle_groups:
+    filtered_sessions = []
+else:
+    try:
+        filtered_result = (
+            supabase.table("sessions")
+            .select("*")
+            .gte("start_date", from_date.isoformat())
+            .lt("start_date", (to_date + timedelta(days=1)).isoformat())
+            .in_("sport_type", selected_sports)
+            .in_("muscle_group", selected_muscle_groups)
+            .order("start_date", desc=True)
+            .execute()
+        )
+        filtered_sessions = filtered_result.data or []
+    except Exception as e:
+        st.error(f"Kunde inte hämta pass: {e}")
+        filtered_sessions = []
+
+qa_by_session: dict[str, dict] = {}
+if filtered_sessions:
+    try:
+        session_ids = [s["id"] for s in filtered_sessions if s.get("id")]
+        qa_result = (
+            supabase.table("qa_responses")
+            .select("session_id,feeling,tiredness")
+            .in_("session_id", session_ids)
+            .execute()
+        )
+        qa_by_session = {r["session_id"]: r for r in (qa_result.data or [])}
+    except Exception as e:
+        st.warning(f"Kunde inte hämta reflektioner: {e}")
+
 # --- Training load over time ---
 
 st.subheader("Träningsbelastning över tid")
 
-try:
-    load_result = (
-        supabase.table("sessions")
-        .select("start_date,training_load,muscle_group")
-        .not_.is_("training_load", "null")
-        .order("start_date")
-        .execute()
-    )
-    load_sessions = load_result.data or []
-except Exception as e:
-    st.error(f"Kunde inte hämta träningsbelastning: {e}")
-    load_sessions = []
-
 load_rows = []
-for s in load_sessions:
+for s in filtered_sessions:
+    if s.get("training_load") is None:
+        continue
     d = parse_date(s.get("start_date"))
     if not d:
         continue
@@ -146,7 +209,7 @@ for s in load_sessions:
     })
 
 if not load_rows:
-    st.info("Ingen träningsbelastning registrerad än.")
+    st.info("Ingen träningsbelastning registrerad för valda filter.")
 else:
     load_df = pd.DataFrame(load_rows)
     weekly_load = (
@@ -171,40 +234,13 @@ st.divider()
 
 # --- Session history & fatigue trend ---
 
-try:
-    recent_result = (
-        supabase.table("sessions")
-        .select("*")
-        .order("start_date", desc=True)
-        .limit(20)
-        .execute()
-    )
-    recent_sessions = recent_result.data or []
-except Exception as e:
-    st.error(f"Kunde inte hämta pass: {e}")
-    recent_sessions = []
-
-qa_by_session: dict[str, dict] = {}
-if recent_sessions:
-    try:
-        session_ids = [s["id"] for s in recent_sessions if s.get("id")]
-        qa_result = (
-            supabase.table("qa_responses")
-            .select("session_id,feeling,tiredness")
-            .in_("session_id", session_ids)
-            .execute()
-        )
-        qa_by_session = {r["session_id"]: r for r in (qa_result.data or [])}
-    except Exception as e:
-        st.warning(f"Kunde inte hämta reflektioner: {e}")
-
 st.subheader("Passhistorik")
 
-if not recent_sessions:
-    st.info("Inga pass registrerade än.")
+if not filtered_sessions:
+    st.info("Inga pass registrerade för valda filter.")
 else:
     history_rows = []
-    for s in recent_sessions:
+    for s in filtered_sessions:
         d = parse_date(s.get("start_date"))
         qa = qa_by_session.get(s.get("id"), {})
         history_rows.append({
@@ -223,7 +259,7 @@ st.divider()
 st.subheader("Trötthetstrend")
 
 trend_rows = []
-for s in reversed(recent_sessions):  # oldest to newest, left to right
+for s in reversed(filtered_sessions):  # oldest to newest, left to right
     d = parse_date(s.get("start_date"))
     if not d or s.get("training_load") is None:
         continue
@@ -236,7 +272,7 @@ for s in reversed(recent_sessions):  # oldest to newest, left to right
     })
 
 if not trend_rows:
-    st.info("Ingen data med träningsbelastning att visa trend för än.")
+    st.info("Ingen data med träningsbelastning att visa trend för valda filter.")
 else:
     trend_df = pd.DataFrame(trend_rows)
     fig_trend = go.Figure()
