@@ -59,25 +59,49 @@ def fmt_date_long(d: date) -> str:
     return f"{d.day} {SV_MONTHS_LONG[d.month - 1]} {d.year}"
 
 
+# --- Plan card styling ---
+# The day matching today's date gets an accent border/background instead of
+# the default plain card, echoing the red accent used for the active sidebar
+# nav link in app.py. Scoped via st.container(key="plan-day-today-*") so it
+# doesn't affect the other (non-today) plan-day cards. Tweak colors/radius to
+# taste.
+_TODAY_CARD_CSS = """
+    <style>
+    div[data-testid="stVerticalBlock"][class*="st-key-plan-day-today-"] {
+        background-color: rgba(255, 75, 75, 0.08);  /* accent background tint */
+        border: 1px solid rgba(255, 75, 75, 0.6) !important;  /* accent border */
+        border-radius: 12px;                                  /* corner roundness */
+    }
+    </style>
+"""
+
+
 def render_plan(plan: dict) -> None:
     """Render a plan dict with 'summary' and 'days' (list of day dicts) as
-    an info box followed by a card per day."""
+    an info box followed by a card per day. The card for today's date is
+    visually highlighted with an "Idag" badge and an accent border/tint."""
     if summary := plan.get("summary"):
         st.info(summary)
     days = plan.get("days") or []
     if not days:
         st.info("Planen innehåller inga dagar.")
         return
-    for day in days:
+    st.markdown(_TODAY_CARD_CSS, unsafe_allow_html=True)
+    today = date.today()
+    for i, day in enumerate(days):
         d = parse_date(day.get("date"))
         date_str = fmt_date_weekday(d) if d else day.get("date", "?")
         sport = day.get("sport_type", "–")
         duration = day.get("duration_min", 0)
         zone = day.get("intensity_zone", "–")
         rationale = day.get("rationale", "")
-        with st.container(border=True):
+        is_today = d == today
+        card_key = f"plan-day-today-{i}" if is_today else f"plan-day-{i}"
+        with st.container(border=True, key=card_key):
             col1, col2 = st.columns([1, 3])
             with col1:
+                if is_today:
+                    st.badge("Idag", color="red")
                 st.write(f"**{date_str}**")
                 if sport.lower() == "rest":
                     st.write("Vila")
