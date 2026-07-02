@@ -65,10 +65,11 @@ except Exception as e:
     st.error(f"Kunde inte hämta mål: {e}")
     goal = None
 
+race_date = parse_date(goal.get("race_date")) if goal else None
+
 if not goal:
     st.info("Inget mål är satt än.")
 else:
-    race_date = parse_date(goal.get("race_date"))
     if race_date:
         weeks_to_race = max(0.0, (race_date - date.today()).days / 7)
         phase_label = PHASE_LABELS.get(_phase_from_weeks(weeks_to_race), "–")
@@ -228,7 +229,107 @@ else:
             "muscle_group": "Muskelgrupp",
         },
     )
+    # "YYYY-vWW" sorts lexicographically the same as chronologically; pin it
+    # explicitly since separate per-color traces don't guarantee week order otherwise.
+    fig_load.update_xaxes(categoryorder="category ascending")
     st.plotly_chart(fig_load, width="stretch")
+
+st.divider()
+
+# --- Long-term plan: actual vs. target (full period, ignores date-range filter) ---
+
+st.subheader("Långtidsplan: faktisk vs. mål")
+
+if not race_date:
+    st.info("Inget loppdatum satt — kan inte visa långtidsgrafen.")
+else:
+    long_term_from_week = today - timedelta(weeks=8)
+    long_term_from_week -= timedelta(days=long_term_from_week.weekday())
+    long_term_to_week = race_date - timedelta(days=race_date.weekday())
+
+    try:
+        actual_query = (
+            supabase.table("sessions")
+            .select("start_date,training_load,muscle_group,sport_type")
+            .gte("start_date", long_term_from_week.isoformat())
+            .lt("start_date", (long_term_to_week + timedelta(days=7)).isoformat())
+            .not_.is_("training_load", "null")
+        )
+        # Long-view is inherently full-period, so the date-range filter is
+        # ignored here on purpose; sport/muscle filters still apply to the bars.
+        if selected_sports:
+            actual_query = actual_query.in_("sport_type", selected_sports)
+        if selected_muscle_groups:
+            actual_query = actual_query.in_("muscle_group", selected_muscle_groups)
+        long_term_actual = actual_query.execute().data or []
+    except Exception as e:
+        st.error(f"Kunde inte hämta långsiktig träningsbelastning: {e}")
+        long_term_actual = []
+
+    try:
+        target_result = (
+            supabase.table("weekly_targets")
+            .select("week_start,target_load")
+            .gte("week_start", long_term_from_week.isoformat())
+            .lte("week_start", long_term_to_week.isoformat())
+            .order("week_start")
+            .execute()
+        )
+        weekly_targets_rows = target_result.data or []
+    except Exception as e:
+        st.error(f"Kunde inte hämta veckomål: {e}")
+        weekly_targets_rows = []
+
+    if not long_term_actual and not weekly_targets_rows:
+        st.info("Ingen data för långtidsgrafen än. Generera en långtidsplan under Inställningar.")
+    else:
+        actual_rows = []
+        for s in long_term_actual:
+            d = parse_date(s.get("start_date"))
+            if not d:
+                continue
+            week_start = d - timedelta(days=d.weekday())
+            iso_year, iso_week, _ = d.isocalendar()
+            actual_rows.append({
+                "week_start": week_start.isoformat(),
+                "week": f"{iso_year}-v{iso_week:02d}",
+                "training_load": float(s.get("training_load") or 0),
+                "muscle_group": (s.get("muscle_group") or "okänd").lower(),
+            })
+
+        fig_long_term = go.Figure()
+        if actual_rows:
+            actual_df = pd.DataFrame(actual_rows)
+            weekly_actual = (
+                actual_df.groupby(["week_start", "week", "muscle_group"], as_index=False)
+                ["training_load"].sum()
+            )
+            for mg in sorted(weekly_actual["muscle_group"].unique()):
+                mg_df = weekly_actual[weekly_actual["muscle_group"] == mg].sort_values("week_start")
+                fig_long_term.add_trace(go.Bar(x=mg_df["week"], y=mg_df["training_load"], name=mg))
+
+        if weekly_targets_rows:
+            target_df = pd.DataFrame(weekly_targets_rows)
+            target_df["week_start_date"] = target_df["week_start"].apply(parse_date)
+            target_df = target_df.dropna(subset=["week_start_date"]).sort_values("week_start_date")
+            target_df["week"] = target_df["week_start_date"].apply(
+                lambda d: f"{d.isocalendar()[0]}-v{d.isocalendar()[1]:02d}"
+            )
+            fig_long_term.add_trace(go.Scatter(
+                x=target_df["week"], y=target_df["target_load"],
+                name="Mål", mode="lines+markers", line=dict(color="black", width=3),
+            ))
+
+        fig_long_term.update_layout(
+            barmode="stack",
+            # "YYYY-vWW" sorts lexicographically the same as chronologically; pin it
+            # explicitly since separate per-muscle-group bar traces plus the target
+            # line don't all cover the same weeks, so trace-order default would scramble it.
+            xaxis=dict(title="Vecka", categoryorder="category ascending"),
+            yaxis=dict(title="Träningsbelastning"),
+            legend=dict(orientation="h", yanchor="bottom", y=1.02),
+        )
+        st.plotly_chart(fig_long_term, width="stretch")
 
 st.divider()
 

@@ -49,6 +49,7 @@ st.markdown(
 pages = [
     st.Page("pages/reflektera.py", title="Reflektera", icon="📝", default=True),
     st.Page("pages/oversikt.py", title="Översikt", icon="📊"),
+    st.Page("pages/installningar.py", title="Inställningar", icon="⚙️"),
 ]
 
 st.navigation(pages).run()
