@@ -53,6 +53,13 @@ def mark_session_ready(session_id: str) -> None:
     supabase.table("sessions").update({"status": "ready_for_plan"}).eq("id", session_id).execute()
 
 
+def mark_session_planned_without_new_plan(session_id: str) -> None:
+    """Used when the athlete opts out of plan regeneration (off-plan/extra
+    activity): go straight to 'planned' so the session leaves the
+    awaiting_input list, without touching ready_for_plan or calling generate_plan."""
+    supabase.table("sessions").update({"status": "planned"}).eq("id", session_id).execute()
+
+
 # --- UI ---
 
 st.title("Träningsreflektion")
@@ -140,6 +147,11 @@ for session in sessions:
                 checked = avail_cols[i].checkbox(label, key=f"avail_{sid}_{i}")
                 availability.append(checked)
 
+            skip_new_plan = st.checkbox(
+                "Generera inte ny plan (rulla vidare på nuvarande)",
+                key=f"skip_plan_{sid}",
+            )
+
             submitted = st.form_submit_button("Spara reflektion")
 
         if submitted:
@@ -148,6 +160,19 @@ for session in sessions:
             except Exception as e:
                 st.error(f"Kunde inte spara reflektion: {e}")
                 continue
+
+            if skip_new_plan:
+                try:
+                    mark_session_planned_without_new_plan(sid)
+                except Exception as e:
+                    st.error(
+                        f"Reflektionen sparades men status på passet kunde inte uppdateras: {e}. "
+                        "Kontakta support eller uppdatera manuellt."
+                    )
+                    continue
+
+                st.success("Reflektion sparad! Nuvarande plan är oförändrad.")
+                st.rerun()
 
             try:
                 mark_session_ready(sid)
